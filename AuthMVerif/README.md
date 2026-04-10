@@ -50,7 +50,7 @@ AuthMVerif/
 
 ## ⚙️ Usage
 
-Run all commands from the `0309grap` directory.
+Run all commands from the `AuthMVerif` directory.
 
 ### 🚀 Example Commands
 
