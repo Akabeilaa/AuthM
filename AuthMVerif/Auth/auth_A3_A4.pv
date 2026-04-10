@@ -1,0 +1,89 @@
+query u:UserHandle, r:RPID, a:AAGUID, c:bitstring;
+inj-event(ServerFinishAuth(u,r,a,c)) ==> inj-event(AuthenticatorFinishAuth(u,r,a,c)).
+
+process
+( 
+	(* Setup *)
+    new G:Gen;                (* Pre-generated parameters of KeyAgreement *)
+
+	(* User A, RP*)
+	new uHandle_A0:UserHandle;   (* User Info *)
+	new pWord_A0:PassWord;
+	new aaguid_A:AAGUID;        (* Authenticatior Info *)
+	new skat_A:skey;           (* Attestation Key Pair *)
+	new skCre_A0:skey;
+	new cntr_A0:CNTR;
+
+	(* User A, RP'*)
+	new uHandle_A1:UserHandle;   (* User Info *)
+	new pWord_A1:PassWord;
+	new skCre_A1:skey;
+	new cntr_A1:CNTR;
+
+	(* User B, RP0 *)
+	new uHandle_B:UserHandle;   (* User Info *)
+	new pWord_B:PassWord;
+	new aaguid_B:AAGUID;        (* Authenticatior Info *)
+	new skat_B:skey;           (* Attestation Key Pair *)
+	new skCre_B:skey;
+	new cntr_B:CNTR;
+
+	(* Relying Party RP *)
+	new rpid_0:RPID;	          (* Relying Party info *)
+	(* Relying Party RP' *)
+	new rpid_1:RPID;	          (* Relying Party info *)
+
+    let pkat_A = pkG(skat_A,G) in
+	let pkCre_A0 = pkG(skCre_A0,G) in
+	let pkCre_A1 = pkG(skCre_A1,G) in
+    let pkat_B = pkG(skat_B,G) in
+	let pkCre_B = pkG(skCre_B,G) in
+	
+	new testcreid_A0:bitstring;
+	let creid_A0 = testcreid_A0 in
+	new testcreid_A1:bitstring;
+	let creid_A1 = testcreid_A1 in
+	new testcreid_B:bitstring;
+	let creid_B = testcreid_B in
+
+	insert Authnr_Client_Record(creid_A0,skCre_A0,rpid_0,uHandle_A0,cntr_A0);
+	insert Authnr_Server_Record(uHandle_A0,rpid_0,cntr_A0);
+	insert Server_Reg_Record(uHandle_A0,aaguid_A,creid_A0,pkCre_A0,cntr_A0);
+
+	insert Authnr_Client_Record(creid_A1,skCre_A1,rpid_1,uHandle_A1,cntr_A1);
+	insert Authnr_Server_Record(uHandle_A1,rpid_1,cntr_A1);
+	insert Server_Reg_Record(uHandle_A1,aaguid_A,creid_A1,pkCre_A1,cntr_A1);
+
+	insert Authnr_Client_Record(creid_B,skCre_B,rpid_0,uHandle_B,cntr_B);
+	insert Authnr_Server_Record(uHandle_B,rpid_0,cntr_B);
+	insert Server_Reg_Record(uHandle_A1,aaguid_B,creid_B,pkCre_B,cntr_B);
+
+	out(cP,(uHandle_A1,aaguid_A,creid_A1,pkCre_A1,cntr_A1));
+	out(cP,(uHandle_B,rpid_0,cntr_B));
+	out(cP,(creid_B,skCre_B,rpid_0,uHandle_B,cntr_B));
+
+    (* some fields initial public *)
+	out(cP,(G,aaguid_A,rpid_0,uHandle_A0,pkat_A,pkCre_A0));
+	out(cP,(G,aaguid_A,rpid_1,uHandle_A1,pkat_A,pkCre_A1));
+	out(cP,(G,aaguid_B,rpid_0,uHandle_B,pkat_B,pkCre_B));
+
+	phase 1;
+    (* malicious entities in Authentication *)
+
+	!(Auth_FA(aaguid_A,MQTT,QRcode))|
+	!(Auth_FC(uHandle_A0, MQTT,CR,QRcode) )|
+	!(Auth_RP(rpid_0, uHandle_A0,CR))|
+
+	!(Auth_FA(aaguid_A,MQTT,QRcode))|
+	!(Auth_FC(uHandle_A1, MQTT,CR,QRcode) )|
+	!(Auth_RP(rpid_1, uHandle_A1,CR))|
+
+	!(Auth_FA(aaguid_B,MQTT,QRcode))|
+	!(Auth_FC(uHandle_B, MQTT,CR,QRcode) )|
+	!(Auth_RP(rpid_0, uHandle_B,CR))
+)
+(*
+Verification summary:
+
+Query inj-event(ServerFinishAuth(u,r,a,c)) ==> inj-event(AuthenticatorFinishAuth(u,r,a,c)) is true.
+*)

@@ -1,0 +1,547 @@
+(**************************************************************************************)
+(*Type declaration of fields in Message*)
+(**************************************************************************************)
+type msg.
+type UserHandle.
+type PassWord.
+type RPID.
+type Challenge.
+type AAGUID.
+type Transaction.
+type TrType.
+type SessionID.
+type Certificate.
+
+type Topic.
+type Timestamp.
+type Nonce.
+type SequenceNum.
+type Qrcode.
+
+type ATType.
+(**************************************************************************************)
+(*Channel Declaration*)
+(**************************************************************************************)
+free cP: channel.(*Public channel*)
+free CR: channel[private]. (* Secure channel between Client and Server *)
+free MQTT: channel.
+free QRcode: channel[private].
+free Test: channel[private].
+
+(**************************************************************************************)
+(*Symmetric Encryption*)
+(**************************************************************************************)
+type key.
+
+fun senc(key, bitstring): bitstring.
+reduc forall k: key,m: bitstring; sdec(k, senc(k, m)) = m.
+
+(**************************************************************************************)
+(*Asymmetric Encryption*)
+(**************************************************************************************)
+type Gen.
+const G:Gen.
+
+type skey.
+type pkey.
+fun pkG(skey,Gen):pkey.(*Obtain the public key from the private key for key pairing*)
+fun aenc(bitstring, pkey): bitstring.
+reduc forall m: bitstring, sk: skey; adec(aenc(m,pkG(sk,G)),sk) = m.
+
+(**************************************************************************************)
+(*Signature Verification*)
+(**************************************************************************************)
+const OK: bitstring.
+
+fun sign(skey, bitstring):bitstring.
+fun checkSign(pkey, bitstring, bitstring): bitstring
+reduc forall m: bitstring, sk: skey; checkSign(pkG(sk,G), sign(sk, m), m) = OK.
+
+(**************************************************************************************)
+(*ECC Public Key Functions for Key Agreement*)
+(**************************************************************************************)
+
+fun associate(skey,pkey):bitstring.
+equation forall a:skey, b:skey; associate(a,pkG(b,G)) = associate(b,pkG(a,G)).
+
+(* Hash function *)
+fun H(bitstring): bitstring.
+fun H_r(RPID): bitstring.
+fun H_s(bitstring): key.
+
+(*******************************************************************)
+(*                  Increasing Counter Value                       *)
+(*******************************************************************)
+type CNTR.
+fun Incr(CNTR):CNTR.
+fun Redu(CNTR):CNTR
+reduc forall cntr:CNTR; Redu(Incr(cntr)) = cntr.
+
+(* HMAC *)
+fun HMAC(bitstring, bitstring): bitstring.
+fun HMAC1(key, bitstring): bitstring.
+
+fun PAKE(bitstring): bitstring.
+fun HKDF(bitstring,bitstring):key.
+
+(* Definitions related to the MQTT protocol *)
+const subtopic_suffix_01:bitstring.
+const subtopic_suffix_011:bitstring.
+fun MQTT_Connect(Topic,bitstring):Topic[data].
+fun MQTT_Con(bitstring,bitstring,Nonce,Timestamp):Topic[data].
+fun MQTT_Subscribe(Topic):msg[data].     
+fun MQTT_Publish(Topic,msg):msg[data].   
+
+fun GetTLSBinding(channel): bitstring.(* Get TLS Binding *)
+fun getun(UserHandle):bitstring.(* Get User Name *)
+fun getuserid(UserHandle):bitstring.(* Get User ID *)
+fun makeCert(bitstring, bitstring, pkey, bitstring): Certificate [data].
+fun ClientData(bitstring, RPID, bitstring,bitstring): bitstring [data].
+
+(* Relevant method definitions *)
+fun PKOptions(UserHandle, RPID, bitstring):bitstring[data].
+fun PKOptions1( RPID, bitstring,bitstring):bitstring[data].
+fun Topicid(SessionID,bitstring,Nonce):bitstring[data].
+fun RootTopic(bitstring,bitstring,Nonce,Timestamp):Topic[data].
+fun Data(SessionID,pkey,bitstring,SequenceNum,SequenceNum,Nonce):bitstring[data].
+fun Signdata(SessionID,bitstring,bitstring,SequenceNum,Nonce):bitstring[data].
+fun getUHandle(bitstring):UserHandle[data].
+fun AttObj_basic(bitstring,CNTR,AAGUID,bitstring,pkey,Certificate,bitstring):bitstring[data].
+fun AttObj_none(bitstring,CNTR,AAGUID,bitstring,pkey):bitstring[data].
+
+(*******************************************************************)
+(*                  Table Declaration                       *)
+(*******************************************************************)
+
+(* UserHandle: UserHandle,        *)
+(* AAGUID: AAGUID,                *)
+(* bitstring: credential id,      *)
+(* pkey: attestation public key,  *)
+(* CNTR: counter                   *)
+table Server_Reg_Record(UserHandle, AAGUID, bitstring, pkey, CNTR).
+table Authnr_Client_Record(bitstring, skey, RPID, UserHandle, CNTR).    (* CreID, skCre, RpID, Uhandle, CNTRA *)
+table Authnr_Server_Record(UserHandle ,RPID, CNTR).
+
+(*******************************************************************)
+(*                  Constant Definition                       *)
+(*******************************************************************)
+const Webauthn_Create:bitstring.
+const Webauthn_Get:bitstring.
+const basic: ATType.
+const none: ATType.
+
+(*******************************************************************)
+(*                  Event Declaration                       *)
+(*******************************************************************)
+event ServerFinishReg(UserHandle, RPID, AAGUID, bitstring, pkey).
+event ClientInitReg(UserHandle, RPID).
+event AuthenticatorFinishReg(UserHandle, RPID, AAGUID, bitstring, pkey).
+
+event ServerFinishAuth(UserHandle, RPID, AAGUID, bitstring).
+event ClientInitAuth(UserHandle, RPID).
+event AuthenticatorFinishAuth(UserHandle, RPID, AAGUID, bitstring).
+
+event SubTopic(Topic).(* Subscribe to topics *)
+event PubTopic(Topic).(* Publish messages to the topic *)
+event VerifyTime(Timestamp,Timestamp).(* Verification of timeliness *)
+event UserVerified(UserHandle, RPID).(* User identity verification *)
+event DisableQrcode().(* Invalidate the QR code *)
+
+let Reg_FA(aaguid: AAGUID,MQTT:channel,QRcode:channel) =
+(
+    in(QRcode,(username':bitstring, userid':bitstring,rpid':RPID,sessionid':SessionID,init_nonce':Nonce,root_topic':Topic,T1':Timestamp,pkC':pkey,e_fa_seq':SequenceNum,FCHash':bitstring));
+    
+    (********************** 5. Processing QR codes *****************)
+    (* 5.1 Obtain information from the root topic *)
+    let RootTopic(hrpid', topicid', _, T0')=root_topic' in
+
+    (* 5.2 Verification of timeliness *)
+    new T:Timestamp; (* Current time *)
+    event VerifyTime(T0',T1');
+    event VerifyTime(T,T0');
+
+    (* 5.3 Set message timing *)
+    let fa_seq=e_fa_seq' in
+    new e_fc_seq:SequenceNum;
+    
+    (* 5.4 Subscribe to subtopic 2 *)
+    let subtopic2 = MQTT_Connect(root_topic', subtopic_suffix_011) in
+    event SubTopic(subtopic2);
+    
+    (********************** 6. Generate shared key k *****************)
+    (* 6.1 Calculate shared key and session key *)
+    new skA:skey;
+    let pkA=pkG(skA,G) in
+    let shared = associate(skA, pkC') in 
+    let info = (sessionid', FCHash') in (*info = sessionid || FCHash*)
+    let k = HKDF(shared, info) in (*k = HKDF(shared, info)*)
+
+    let testk1 = k in
+
+    (* 6.2 Output encrypted messages *)
+    let data = Data(sessionid',pkA,FCHash',fa_seq,e_fc_seq,init_nonce') in
+    let edata=senc(k,data) in
+    
+    new T2:Timestamp;
+
+    (* 6.3 Output message *)
+    out(MQTT,(edata,pkA,T2,fa_seq));
+
+    (********************** 8. Confirm Key *****************)
+    in(MQTT,(eoptions':bitstring,esigndata':bitstring,fc_seq':SequenceNum,T3':Timestamp));
+    
+    (* 8.1 Verification message sequence number *)
+    if e_fc_seq = fc_seq' then
+    (
+        (* 8.2 Get eoptions *)
+        let (pkoptions':bitstring,sessionid':SessionID,fc_seq':SequenceNum,e_fa_seq':SequenceNum,T3':Timestamp)=sdec(k,eoptions') in
+        
+        (* 8.3 Verify message validity *)
+        new T:Timestamp;
+        event VerifyTime(T,T3');
+
+        (* 8.4 Verify signature *)
+        let signdata=Signdata(sessionid',FCHash',pkoptions',fc_seq',init_nonce') in
+        if checkSign(pkC',esigndata',signdata)=OK then
+        (
+            
+            let fa_seq=e_fa_seq' in
+
+            (********************** 9. Build credentials *****************)
+            (* 9.1 Get user fields *)
+            let PKOptions(uHandle':UserHandle, rpid':RPID, challenge':bitstring)=pkoptions' in
+            let rHash = H_r(rpid') in
+            event UserVerified(uHandle', rpid');
+           
+            (* 9.2 Initialize the counter *)
+            new cntr: CNTR;
+            let testcntr = cntr in
+            
+            (* 9.3 Generate a public-private key pair *)
+            new skCre: skey;
+            let pkCre = pkG(skCre,G) in
+            let testskCre = skCre in
+
+            (* 9.4.1 Generate CreID *)
+            new creid: bitstring;
+            let testcreid = creid in
+
+            (* 9.4.2 Generate signature authentication information *)
+            insert Authnr_Client_Record(creid, skCre, rpid', uHandle', cntr);
+            event AuthenticatorFinishReg(uHandle', rpid', aaguid, creid, pkCre);
+
+            (* 9.4.3 Output credential *)
+            let attObj = AttObj_none(rHash, cntr, aaguid, creid, pkCre) in
+            let eatt=senc(k,(attObj,fa_seq)) in
+            out(MQTT, eatt) 
+        )
+        
+    )
+).
+
+let Reg_FC(uHandle: UserHandle, pWord: PassWord,MQTT:channel,CR:channel,QRcode:channel) =
+(
+    (********************** 0. Initialization, user inputs information to log in *****************)
+    out(CR, (uHandle, pWord));
+
+    (********************** 2. Get PKOptions from RP *********************)
+    in(CR, pkoptions':bitstring);
+    let PKOptions(uHandle', rpid', challenge')=pkoptions' in
+
+    (********************** 3. Generate topics *******************************)
+    (* 3.1 Initialize serial number *)
+    new skC:skey;
+    let pkC=pkG(skC,G) in
+
+    new sessionid:SessionID;
+    new init_nonce:Nonce;
+    new T0:Timestamp;
+    
+    (* 3.2 Create and subscribe to topics *)
+    let username=getun(uHandle) in
+    let topic_input = Topicid(sessionid, username, init_nonce) in
+    let topicid = H(topic_input) in
+    let root_topic = RootTopic(H_r(rpid'), topicid, init_nonce, T0) in (*根话题*)
+    let subtopic1 = MQTT_Connect(root_topic, subtopic_suffix_01) in  (* FC接收FA消息的子话题 *)
+    event SubTopic(subtopic1); (* Subscribe to subtopic 1 *)
+
+    (********************** 4. Generate QR code *************************)
+    (* 4.1 Constructing FCHash fields *)
+    new e_fa_seq:SequenceNum;
+    let tbinding = GetTLSBinding(CR) in
+    event ClientInitReg(uHandle, rpid');
+    let clientData = ClientData(challenge', rpid', Webauthn_Create,tbinding) in
+    let FCHash = H(clientData) in
+
+    (* 4.3 Display QR code *)
+    new T1:Timestamp;
+    let userid=getuserid(uHandle) in
+    out(QRcode,(username, userid,rpid',sessionid,init_nonce,root_topic,T1,pkC,e_fa_seq,FCHash));
+
+    (********************** 7. Key negotiation *************************)
+    in(MQTT,(edata':bitstring,pkA':pkey,T2':Timestamp,fa_seq':SequenceNum));
+
+    (* 7.1 Verify the received serial number *)
+    if fa_seq'=e_fa_seq then
+    (
+        (* 7.2 Calculate k *)
+        new T:Timestamp;
+        event VerifyTime(T,T2');
+
+        let shared = associate(skC, pkA') in
+        let info = (sessionid, FCHash) in
+        let k = HKDF(shared, info) in
+        let testk2 = k in
+
+        (* 7.3 Validation fields *)
+        let Data(_,_,_,_,e_fc_seq',_)=sdec(k,edata') in
+        let data=Data(sessionid,pkA',FCHash,fa_seq',e_fc_seq',init_nonce) in
+        let edata=senc(k,data) in
+        
+        if edata=edata' then
+        (
+            (* 7.4 Construct message *)
+            event DisableQrcode(); (* Disable QR codes *)
+            let fc_seq=e_fc_seq' in
+            let clientData=ClientData(challenge',rpid',Webauthn_Create,tbinding) in
+            new T3:Timestamp;
+            let signdata=Signdata(sessionid,FCHash,pkoptions',fc_seq,init_nonce) in
+            let esigndata=sign(skC,signdata) in
+            let eoptions=senc(k,(pkoptions',sessionid,fc_seq,e_fa_seq,T3)) in
+            out(MQTT,(eoptions,esigndata,fc_seq,T3));
+            
+            (********************** 10. Processing forwarding credentials *****************)
+            in(MQTT,eatt:bitstring);
+            (* 10.1 Decrypt message *)
+            let (attobj':bitstring,fa_seq':SequenceNum)=sdec(k,eatt) in
+
+            (* 10.2 Verify message sequence number *)
+            if fa_seq'=e_fa_seq then
+            (
+                (* 10.3 Forwarding credential information and client information *)
+                out(CR, (attobj', clientData))
+            )
+        )  
+    )
+).
+
+let Reg_RP(rpid: RPID, uHandle: UserHandle, pWord: PassWord,CR:channel) =
+(
+    (********************** 1. Verify login information *****************)
+    (* 1.1 Obtaining user information *)
+    in(CR, (uHandle': UserHandle, pWord': PassWord));
+    (* 1.2 Verify user information *)
+    if uHandle' = uHandle && pWord' = pWord then
+    (
+        (* 1.3 Retrun PKOptions *)
+        new challenge: bitstring;
+        let tbinding = GetTLSBinding(CR) in
+        let pkoptions'=PKOptions(uHandle', rpid, challenge) in
+        out(CR, pkoptions');
+        
+        (********************** 11. Processing credential information and client information *****************)
+        in(CR,(attobj':bitstring,clientData':bitstring));
+
+        (* 11.1 Parse fields and construct client information *)
+        let AttObj_none(rHash', cntr', aaguid', creid', pkCre')=attobj' in
+        let clientData = ClientData(challenge, rpid, Webauthn_Create,tbinding) in
+        let rHash = H_r(rpid) in
+
+        (* 11.2 Verify and store information *)
+        if clientData = clientData' && rHash = rHash' then
+        (
+            insert Server_Reg_Record(uHandle, aaguid', creid', pkCre', cntr');
+            event ServerFinishReg(uHandle, rpid, aaguid', creid', pkCre')
+        )
+    )
+).
+
+let Auth_FA(aaguid: AAGUID,MQTT:channel,QRcode:channel)=
+(
+    in(QRcode,(username':bitstring, userid':bitstring,rpid':RPID,sessionid':SessionID,init_nonce':Nonce,root_topic':Topic,T1':Timestamp,pkC':pkey,e_fa_seq':SequenceNum,FCHash':bitstring));
+
+    (********************** 5. Handle Qrcode *****************)
+    (* 5.1 Obtain information from the root topic *)
+    let RootTopic(hrpid', topicid', _, T0')=root_topic' in
+
+    (* 5.2 Verification of timeliness *)
+    new T:Timestamp;(* current time *)
+    event VerifyTime(T0',T1');
+    event VerifyTime(T,T0');
+
+    (* 5.3 Set message timing *)
+    let fa_seq=e_fa_seq' in
+    new e_fc_seq:SequenceNum;
+
+    (* 5.4 Subscribe to subtopic 2 *)
+    let subtopic2 = MQTT_Connect(root_topic', subtopic_suffix_011) in
+    event SubTopic(subtopic2);
+
+    (********************** 6. Generate shared key k *****************)
+    (* 6.1 Calculate session key *)
+    new skA:skey;
+    let pkA=pkG(skA,G) in
+
+    let shared = associate(skA, pkC') in
+    let info = (sessionid', FCHash') in
+    let k = HKDF(shared, info) in
+    
+    let testk1 = k in
+
+    (* 6.2 Output encrypted messages *)
+    let edata=senc(k,(sessionid',pkA,FCHash',fa_seq,e_fc_seq,init_nonce')) in
+    new T2:Timestamp;
+
+    (* 6.3 Output message *)
+    out(MQTT,(edata,pkA,T2,fa_seq));
+
+    (********************** 8. Confirm Key *****************)
+    in(MQTT,(eoptions':bitstring,esigndata':bitstring,fc_seq':SequenceNum,T3':Timestamp));
+    (* 8.1 Verification message sequence number *)
+    if e_fc_seq = fc_seq' then
+    (
+        (* 8.2 Get eoptions *)
+        let (pkoptions':bitstring,sessionid':SessionID,fc_seq':SequenceNum,e_fa_seq':SequenceNum,T3':Timestamp)=sdec(k,eoptions') in
+        
+        (* 8.3 Verify message validity *)
+        event VerifyTime(T,T3');
+        let signdata=Signdata(sessionid',FCHash',pkoptions',fc_seq',init_nonce') in
+        
+        (* 8.4 Verify signature *)
+        let signdata=Signdata(sessionid',FCHash',pkoptions',fc_seq',init_nonce') in
+        if checkSign(pkC',esigndata',signdata)=OK then
+        (
+            let fa_seq=e_fa_seq' in
+
+            (********************** 9. Construct assertion *****************)
+            (* 9.1 Get user fields *)
+            let PKOptions1(rpid':RPID, FCHash':bitstring,creid':bitstring)=pkoptions' in
+            let rHash = H_r(rpid') in
+
+            (* 9.2 Retrieve data from the database *)
+            get Authnr_Client_Record(=creid',xskCre,xrpid,uHandle,xcntr) in
+            let testskCre=xskCre in
+            event UserVerified(uHandle, rpid');
+
+            (* 9.3 Handle data *)
+            let cntr=Incr(xcntr) in
+            let testcntr = cntr in
+            let pkCre=pkG(xskCre,G) in
+
+            (* 9.3 Build a signature *)
+            let s=sign(xskCre,(rHash,cntr, aaguid, creid', pkCre, FCHash')) in
+            event AuthenticatorFinishAuth(uHandle, xrpid, aaguid, creid');
+            let eatt=senc(k,(FCHash',cntr,aaguid,creid',pkCre,s,uHandle)) in
+            out(MQTT,eatt)
+        )
+    )
+).
+
+let Auth_FC(uHandle:UserHandle,MQTT:channel,CR:channel,QRcode:channel)=
+(
+    let tbinding = GetTLSBinding(CR) in
+
+    (********************** 2. Get PKOptions from RP *****************)
+    (* 2.1 HandlePKOptions *)
+    in(CR,pkoptions':bitstring);
+    let PKOptions1(rpid':RPID,challenge':bitstring,creid':bitstring) = pkoptions' in
+   
+    (* 2.2 Constructing client information *)
+    let clientData = ClientData(challenge', rpid', Webauthn_Get,tbinding) in
+    let FCHash = H(clientData) in
+
+    (********************** 3. Generate topics **************************)
+    (* 3.1 Initialize serial number *)
+    new skC:skey;
+    let pkC=pkG(skC,G) in
+
+    new sessionid:SessionID;
+    new init_nonce:Nonce;
+    new T0:Timestamp;
+
+    (* 3.2 Create and subscribe to topics *)
+    let username=getun(uHandle) in
+    let topic_input = Topicid(sessionid, username, init_nonce) in
+    let topicid = H(topic_input) in
+    let root_topic = RootTopic(H_r(rpid'), topicid, init_nonce, T0) in
+    let subtopic1 = MQTT_Connect(root_topic, subtopic_suffix_01) in  (* FC接收FA消息的主题 *)
+    event SubTopic(subtopic1);
+
+    (********************** 4. Generate QR code *************************)
+    (* 4.1 Constructing FCHash fields *)
+    new e_fa_seq:SequenceNum;
+    let tbinding = GetTLSBinding(CR) in
+    event ClientInitAuth(uHandle, rpid');
+    let clientData = ClientData(challenge', rpid', Webauthn_Get,tbinding) in
+    let FCHash = H(clientData) in
+
+    (* 4.2 Display QR code *)
+    new T1:Timestamp;
+    let userid=getuserid(uHandle) in
+    out(QRcode,(username, userid,rpid',sessionid,init_nonce,root_topic,T1,pkC,e_fa_seq,FCHash));
+
+    (********************** 7. Key negotiation *************************)
+    in(MQTT,(edata':bitstring,pkA':pkey,T2':Timestamp,fa_seq':SequenceNum));
+    (* 7.1 Verify whether the received fa_seq' is equal to the expected e_fa_seq *)
+    if fa_seq'=e_fa_seq then
+    (
+        (* 7.2 Calculate k *)
+        new T:Timestamp;
+        event VerifyTime(T,T2');
+        let shared = associate(skC, pkA') in
+        let info = (sessionid, FCHash) in
+        let k = HKDF(shared, info) in
+        let testk2 = k in
+
+        (* 7.3 Verify edata and obtain 'e_fc_seq' *)
+        let Data(_,_,_,_,e_fc_seq',_)=sdec(k,edata') in
+        let data=Data(sessionid,pkA',FCHash,fa_seq',e_fc_seq',init_nonce) in
+        let edata=senc(k,data) in
+        event VerifyTime(T,T2');
+    
+        if edata=edata' then
+        (
+            (* 7.4 Construct message *)
+            event DisableQrcode();
+            let fc_seq=e_fc_seq' in
+            
+            new T3:Timestamp;
+            let signdata=Signdata(sessionid,FCHash,pkoptions',fc_seq,init_nonce) in
+            let esigndata=sign(skC,signdata) in
+            let eoptions=senc(k,(pkoptions',sessionid,fc_seq,e_fa_seq,T3)) in
+            out(MQTT,(eoptions,esigndata,fc_seq,T3));
+
+            (********************** 10. Handling forwarding assertions *****************)
+            in(MQTT,(eatt:bitstring));
+            (* 10.1 Decrypt and send to RP *)
+            let (FCHash':bitstring,cntr:CNTR,aaguid:AAGUID,creid:bitstring,pkCre:pkey,s:bitstring,uHandle:UserHandle)=sdec(k,eatt) in
+            out(CR,(creid, FCHash', cntr, aaguid, pkCre, s, uHandle, clientData))
+        )
+    )
+).
+
+let Auth_RP(rpid: RPID, uHandle: UserHandle,CR:channel)=
+(
+    (**********************1. Pass the challenge to FC *************************)
+    (* 1.1 Retrieve storage information *)
+    new challenge: bitstring;
+    let tbinding = GetTLSBinding(CR) in
+    get Server_Reg_Record(=uHandle, xaaguid, xcreid, xpkCre, xcntr) in
+    let testcreid=xcreid in
+
+    (* 1.2 Construct pkOptions *)
+    let pkOptions=PKOptions1(rpid,challenge,xcreid) in
+    out(CR,pkOptions);
+
+    (********************** 11. Handling forwarding assertions ******************************)
+    in(CR, (FCHash':bitstring,cntr':CNTR,aaguid':AAGUID,creid':bitstring,pkCre':pkey,s':bitstring,uHandle':UserHandle,clientData':bitstring));
+    (* 11.1 Build fields *)
+    let xclientData=ClientData(challenge, rpid, Webauthn_Get,tbinding) in
+    let xrHash=H_r(rpid) in
+    let xFCHash=H(xclientData) in
+    (* 11.2 Validation fields *)
+    if clientData'=xclientData && FCHash'=xFCHash && aaguid'=xaaguid && creid'=xcreid && pkCre'=xpkCre && cntr'=xcntr then
+    (
+        event ServerFinishAuth(uHandle, rpid, aaguid', creid')
+    )
+).

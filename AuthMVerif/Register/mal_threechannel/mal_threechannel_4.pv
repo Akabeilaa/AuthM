@@ -1,0 +1,53 @@
+query secret testk1.  
+query secret testk2. 
+query secret testcntr.
+query secret testskCre.
+query secret testcreid.
+
+(* A5 *)
+query u:UserHandle, r:RPID, a:AAGUID, c:bitstring, pkCre:pkey; inj-event(ServerFinishReg(u,r,a,c,pkCre)) ==> inj-event(ClientInitReg(u,r)).
+(* A6 *)
+query u: UserHandle, r: RPID, a: AAGUID, c: bitstring, pkCre: pkey; inj-event(ServerFinishReg(u,r,a,c,pkCre)) ==> inj-event(AuthenticatorFinishReg(u,r,a,c,pkCre)).
+
+process
+(
+    new G: Gen;
+    new aaguid: AAGUID;
+    new userHandle: UserHandle;
+    new pWord: PassWord;
+    new rpid: RPID;
+
+    out(cP, (G, aaguid, userHandle, rpid));
+
+    (* FA和FC都使用新鲜密钥 - 未被攻陷 *)
+Reg_FC(userHandle, pWord,MQTT,cP,QRcode) | 
+Reg_FC(userHandle, pWord,MQTT,CR,cP) | 
+Reg_RP(rpid, userHandle, pWord,cP) |
+    (* 正常流程 *)
+    Reg_FA(aaguid,MQTT,QRcode) |
+    Reg_FC(userHandle, pWord,MQTT,CR,QRcode) | 
+    Reg_RP(rpid, userHandle, pWord,CR)
+)
+
+
+
+
+(*
+--------------------------------------------------------------
+Verification summary:
+
+Query secret testk1 is true.
+
+Query secret testk2_2,testk2_1,testk2 is false.
+
+Query secret testcntr is false.
+
+Query secret testskCre is true.
+
+Query secret testcreid is false.
+
+Query inj-event(ServerFinishReg(u,r,a,c,pkCre_1)) ==> inj-event(ClientInitReg(u,r)) is false.
+
+Query inj-event(ServerFinishReg(u,r,a,c,pkCre_1)) ==> inj-event(AuthenticatorFinishReg(u,r,a,c,pkCre_1)) is false.
+--------------------------------------------------------------
+*)

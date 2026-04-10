@@ -1,0 +1,44 @@
+query secret testk1.  
+query secret testk2. 
+query secret testcntr.
+query secret testskCre.
+query secret testcreid.
+
+process
+(
+    new G: Gen;
+    new aaguid: AAGUID;
+    new userHandle: UserHandle;
+    new pWord: PassWord;
+    new rpid: RPID;
+
+    out(cP, (G, aaguid, userHandle, rpid));
+
+    (* FA和FC都使用新鲜密钥 - 未被攻陷 *)
+Auth_FA(aaguid,MQTT,cP) |
+Auth_FC(userHandle, MQTT,cP,QRcode) |
+Auth_FC(userHandle, MQTT,CR,cP) |
+Auth_RP(rpid, userHandle,cP)|
+    (* 正常流程 *)
+    Auth_FA(aaguid,MQTT,QRcode) |
+    Auth_FC(userHandle, MQTT,CR,QRcode) | 
+    Auth_RP(rpid, userHandle,CR)
+)
+
+
+
+(*
+--------------------------------------------------------------
+Verification summary:
+
+Query secret testk1_1,testk1 is false.
+
+Query secret testk2_2,testk2_1,testk2 is true.
+
+Query secret testcntr_1,testcntr is true.
+
+Query secret testskCre_1,testskCre is true.
+
+Query secret testcreid_1,testcreid is true.
+--------------------------------------------------------------
+*)
